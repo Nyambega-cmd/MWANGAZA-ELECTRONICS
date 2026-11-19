@@ -3,6 +3,8 @@ package com.mwangaza.pricelist;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.Context;
+import android.content.Intent;
+import android.net.Uri;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
@@ -30,6 +32,12 @@ import android.widget.Toast;
 
 import android.widget.ScrollView;
 
+import java.io.BufferedReader;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.io.OutputStream;
+import java.io.OutputStreamWriter;
+import java.nio.charset.StandardCharsets;
 import java.text.DecimalFormat;
 import java.util.ArrayList;
 import java.util.List;
@@ -53,6 +61,9 @@ public class MainActivity extends Activity {
     private EditText searchBox;
     private View deleteBar, headerSpacer, fab;
     private boolean deleteMode = false;
+    private boolean priceMode = false;
+    private TextView doneBtn;
+    private static final int REQ_EXPORT = 101, REQ_IMPORT = 102;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -150,7 +161,8 @@ public class MainActivity extends Activity {
         TextView done = text("DONE", 13, RED, true);
         done.setBackground(rounded(Color.WHITE, 16));
         done.setPadding(dp(16), dp(6), dp(16), dp(6));
-        done.setOnClickListener(v -> setDeleteMode(false));
+        doneBtn = done;
+        done.setOnClickListener(v -> { setDeleteMode(false); setPriceMode(false); });
         db2.addView(done);
         deleteBar.setVisibility(View.GONE);
         col.addView(deleteBar);
@@ -252,19 +264,19 @@ public class MainActivity extends Activity {
     private void showMenu(View anchor) {
         PopupMenu pm = new PopupMenu(this, anchor, Gravity.END);
         pm.getMenu().add(0, 1, 0, "Add Item");
-        pm.getMenu().add(0, 2, 1, deleteMode ? "Exit Delete Mode" : "Delete Items");
-        pm.getMenu().add(0, 3, 2, "Delete All Items");
+        pm.getMenu().add(0, 2, 1, priceMode ? "Exit Price Update" : "Update Prices");
+        pm.getMenu().add(0, 3, 2, deleteMode ? "Exit Delete Mode" : "Delete Items");
+        pm.getMenu().add(0, 4, 3, "Export List");
+        pm.getMenu().add(0, 5, 4, "Import List");
+        pm.getMenu().add(0, 6, 5, "Delete All Items");
         pm.setOnMenuItemClickListener(mi -> {
             switch (mi.getItemId()) {
-                case 1:
-                    showItemDialog(null);
-                    break;
-                case 2:
-                    setDeleteMode(!deleteMode);
-                    break;
-                case 3:
-                    confirmDeleteAll();
-                    break;
+                case 1: showItemDialog(null); break;
+                case 2: setPriceMode(!priceMode); break;
+                case 3: setDeleteMode(!deleteMode); break;
+                case 4: startExport(); break;
+                case 5: startImport(); break;
+                case 6: confirmDeleteAll(); break;
             }
             return true;
         });
@@ -273,16 +285,216 @@ public class MainActivity extends Activity {
 
     private void setDeleteMode(boolean on) {
         deleteMode = on;
-        deleteBar.setVisibility(on ? View.VISIBLE : View.GONE);
-        headerSpacer.setVisibility(on ? View.VISIBLE : View.GONE);
-        fab.setVisibility(on ? View.GONE : View.VISIBLE);
+        if (on) priceMode = false;
+        updateModeUi();
+    }
+
+    private void setPriceMode(boolean on) {
+        priceMode = on;
+        if (on) deleteMode = false;
+        updateModeUi();
+    }
+
+    private void updateModeUi() {
+        boolean any = deleteMode || priceMode;
+        deleteBar.setVisibility(any ? View.VISIBLE : View.GONE);
+        if (priceMode) {
+            deleteBar.setBackgroundColor(0xFF2E7D32);
+            deleteBannerText.setText("Update prices: tap an item to change its prices");
+            doneBtn.setTextColor(0xFF2E7D32);
+        } else {
+            deleteBar.setBackgroundColor(RED);
+            deleteBannerText.setText("Delete mode: tap the bin beside an item");
+            doneBtn.setTextColor(RED);
+        }
+        headerSpacer.setVisibility(deleteMode ? View.VISIBLE : View.GONE);
+        fab.setVisibility(any ? View.GONE : View.VISIBLE);
         adapter.notifyDataSetChanged();
     }
 
     @Override
     public void onBackPressed() {
-        if (deleteMode) setDeleteMode(false);
+        if (deleteMode || priceMode) { setDeleteMode(false); setPriceMode(false); }
         else super.onBackPressed();
+    }
+
+    // ---------------------------------------------------------------- Quick price update
+
+    private void showPriceDialog(final DbHelper.Item it) {
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(dp(22), dp(12), dp(22), dp(4));
+        final int NUM = InputType.TYPE_CLASS_NUMBER;
+        final int DEC = InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_FLAG_DECIMAL;
+        final EditText qtyEt = field(box, "Quantity", NUM, String.valueOf(it.quantity));
+        final EditText wsEt = field(box, "Wholesale price", DEC, plain(it.wholesale));
+        final EditText rtEt = field(box, "Retail price", DEC, plain(it.retail));
+        final AlertDialog d = new AlertDialog.Builder(this,
+                android.R.style.Theme_Material_Light_Dialog_Alert)
+                .setTitle(it.item + (TextUtils.isEmpty(it.brand) ? "" : " (" + it.brand + ")"))
+                .setView(box)
+                .setPositiveButton("Update", null)
+                .setNegativeButton("Cancel", null)
+                .create();
+        d.getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_VISIBLE);
+        d.show();
+        d.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
+            int qty = (int) parseMoney(qtyEt.getText().toString());
+            db.update(it.id, it.item, it.brand, qty,
+                    parseMoney(wsEt.getText().toString()), parseMoney(rtEt.getText().toString()));
+            d.dismiss();
+            refresh();
+            Toast.makeText(this, "Updated", Toast.LENGTH_SHORT).show();
+        });
+        wsEt.requestFocus();
+        wsEt.selectAll();
+    }
+
+    // ---------------------------------------------------------------- Export / Import (CSV)
+
+    private void startExport() {
+        if (db.search("").isEmpty()) {
+            Toast.makeText(this, "There are no items to export", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        Intent i = new Intent(Intent.ACTION_CREATE_DOCUMENT);
+        i.addCategory(Intent.CATEGORY_OPENABLE);
+        i.setType("text/csv");
+        i.putExtra(Intent.EXTRA_TITLE, "Mwangaza_Price_List.csv");
+        startActivityForResult(i, REQ_EXPORT);
+    }
+
+    private void startImport() {
+        Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        i.addCategory(Intent.CATEGORY_OPENABLE);
+        i.setType("*/*");
+        startActivityForResult(i, REQ_IMPORT);
+    }
+
+    @Override
+    protected void onActivityResult(int req, int res, Intent data) {
+        super.onActivityResult(req, res, data);
+        if (res != RESULT_OK || data == null || data.getData() == null) return;
+        Uri uri = data.getData();
+        if (req == REQ_EXPORT) doExport(uri);
+        else if (req == REQ_IMPORT) doImport(uri);
+    }
+
+    private String csvEscape(String s) {
+        if (s == null) s = "";
+        if (s.contains(",") || s.contains("\"") || s.contains("\n") || s.contains("\r")) {
+            return "\"" + s.replace("\"", "\"\"") + "\"";
+        }
+        return s;
+    }
+
+    private void doExport(Uri uri) {
+        try {
+            StringBuilder sb = new StringBuilder();
+            sb.append("ITEM,BRAND,QUANTITY,WHOLESALE PRICE,RETAIL PRICE\r\n");
+            List<DbHelper.Item> all = db.search("");
+            for (DbHelper.Item i : all) {
+                sb.append(csvEscape(i.item)).append(',')
+                  .append(csvEscape(i.brand)).append(',')
+                  .append(i.quantity).append(',')
+                  .append(plain(i.wholesale)).append(',')
+                  .append(plain(i.retail)).append("\r\n");
+            }
+            OutputStream os = getContentResolver().openOutputStream(uri);
+            OutputStreamWriter w = new OutputStreamWriter(os, StandardCharsets.UTF_8);
+            w.write("\uFEFF");
+            w.write(sb.toString());
+            w.close();
+            Toast.makeText(this, "Exported " + all.size() + " items. Send the file to share it.",
+                    Toast.LENGTH_LONG).show();
+        } catch (Exception e) {
+            Toast.makeText(this, "Export failed: " + e.getMessage(), Toast.LENGTH_LONG).show();
+        }
+    }
+
+    private List<String[]> parseCsv(String text) {
+        List<String[]> rows = new ArrayList<>();
+        List<String> cur = new ArrayList<>();
+        StringBuilder f = new StringBuilder();
+        boolean q = false;
+        int n = text.length();
+        for (int i = 0; i < n; i++) {
+            char ch = text.charAt(i);
+            if (q) {
+                if (ch == '"') {
+                    if (i + 1 < n && text.charAt(i + 1) == '"') { f.append('"'); i++; }
+                    else q = false;
+                } else f.append(ch);
+            } else if (ch == '"') {
+                q = true;
+            } else if (ch == ',') {
+                cur.add(f.toString()); f.setLength(0);
+            } else if (ch == '\r') {
+                // ignore
+            } else if (ch == '\n') {
+                cur.add(f.toString()); f.setLength(0);
+                rows.add(cur.toArray(new String[0])); cur.clear();
+            } else f.append(ch);
+        }
+        if (f.length() > 0 || !cur.isEmpty()) {
+            cur.add(f.toString());
+            rows.add(cur.toArray(new String[0]));
+        }
+        return rows;
+    }
+
+    private void doImport(Uri uri) {
+        try {
+            InputStream is = getContentResolver().openInputStream(uri);
+            BufferedReader br = new BufferedReader(new InputStreamReader(is, StandardCharsets.UTF_8));
+            StringBuilder sb = new StringBuilder();
+            char[] buf = new char[4096];
+            int r;
+            while ((r = br.read(buf)) > 0) sb.append(buf, 0, r);
+            br.close();
+            String text = sb.toString();
+            if (text.startsWith("\uFEFF")) text = text.substring(1);
+
+            final List<DbHelper.Item> items = new ArrayList<>();
+            boolean first = true;
+            for (String[] c : parseCsv(text)) {
+                if (c.length == 0 || c[0].trim().isEmpty()) { first = false; continue; }
+                if (first) {
+                    first = false;
+                    String h = c[0].trim();
+                    if (h.equalsIgnoreCase("ITEM") || h.equalsIgnoreCase("ITEMS")) continue;
+                }
+                DbHelper.Item it = new DbHelper.Item();
+                it.item = c[0].trim();
+                it.brand = c.length > 1 ? c[1].trim() : "";
+                it.quantity = c.length > 2 ? (int) parseMoney(c[2]) : 0;
+                it.wholesale = c.length > 3 ? parseMoney(c[3]) : 0;
+                it.retail = c.length > 4 ? parseMoney(c[4]) : 0;
+                items.add(it);
+            }
+            if (items.isEmpty()) {
+                Toast.makeText(this, "No items found in that file", Toast.LENGTH_LONG).show();
+                return;
+            }
+            new AlertDialog.Builder(this, android.R.style.Theme_Material_Light_Dialog_Alert)
+                    .setTitle("Import " + items.size() + " items")
+                    .setMessage("Replace your current list, or add to it? When adding, items with the "
+                            + "same name and brand are updated with the new quantity and prices.")
+                    .setPositiveButton("Replace list", (d, w) -> {
+                        db.importItems(items, true);
+                        refresh();
+                        Toast.makeText(this, "Imported " + items.size() + " items", Toast.LENGTH_SHORT).show();
+                    })
+                    .setNeutralButton("Add / Update", (d, w) -> {
+                        db.importItems(items, false);
+                        refresh();
+                        Toast.makeText(this, "Imported " + items.size() + " items", Toast.LENGTH_SHORT).show();
+                    })
+                    .setNegativeButton("Cancel", null)
+                    .show();
+        } catch (Exception e) {
+            Toast.makeText(this, "Import failed: " + e.getMessage(), Toast.LENGTH_LONG).show();
+        }
     }
 
     // ---------------------------------------------------------------- Data
@@ -300,7 +512,7 @@ public class MainActivity extends Activity {
                     : "No matching items found.");
         }
         countView.setText("Total items: " + data.size());
-        if (empty && deleteMode) setDeleteMode(false);
+        if (empty && q.isEmpty()) { setDeleteMode(false); setPriceMode(false); }
     }
 
     private EditText field(LinearLayout box, String hint, int type, String value) {
@@ -362,7 +574,7 @@ public class MainActivity extends Activity {
     }
 
     private double parseMoney(String s) {
-        try { return Double.parseDouble(s.trim()); } catch (Exception e) { return 0; }
+        try { return Double.parseDouble(s.replace(",", "").replace("KSh", "").replace("Ksh", "").trim()); } catch (Exception e) { return 0; }
     }
 
     private String plain(double v) {
@@ -424,7 +636,8 @@ public class MainActivity extends Activity {
             r.bin.setVisibility(deleteMode ? View.VISIBLE : View.GONE);
             r.bin.setOnClickListener(v -> confirmDelete(it));
             r.setOnClickListener(v -> {
-                if (!deleteMode) showItemDialog(it);
+                if (priceMode) showPriceDialog(it);
+                else if (!deleteMode) showItemDialog(it);
             });
             return r;
         }

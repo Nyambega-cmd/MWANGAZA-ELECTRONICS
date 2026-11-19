@@ -69,6 +69,37 @@ public class DbHelper extends SQLiteOpenHelper {
         getWritableDatabase().delete("items", null, null);
     }
 
+    /** Import a list of items. replace=true wipes the list first; otherwise matching items are updated. */
+    public int importItems(List<Item> items, boolean replace) {
+        SQLiteDatabase d = getWritableDatabase();
+        int n = 0;
+        d.beginTransaction();
+        try {
+            if (replace) d.delete("items", null, null);
+            for (Item i : items) {
+                long existing = -1;
+                if (!replace) {
+                    Cursor c = d.rawQuery(
+                            "SELECT _id FROM items WHERE LOWER(item)=LOWER(?) AND LOWER(IFNULL(brand,''))=LOWER(?)",
+                            new String[]{i.item, i.brand == null ? "" : i.brand});
+                    if (c.moveToFirst()) existing = c.getLong(0);
+                    c.close();
+                }
+                ContentValues v = values(i.item, i.brand, i.quantity, i.wholesale, i.retail);
+                if (existing >= 0) {
+                    d.update("items", v, "_id=?", new String[]{String.valueOf(existing)});
+                } else {
+                    d.insert("items", null, v);
+                }
+                n++;
+            }
+            d.setTransactionSuccessful();
+        } finally {
+            d.endTransaction();
+        }
+        return n;
+    }
+
     public List<Item> search(String q) {
         List<Item> list = new ArrayList<>();
         String cols = "SELECT _id, item, brand, quantity, wholesale, retail FROM items ";
