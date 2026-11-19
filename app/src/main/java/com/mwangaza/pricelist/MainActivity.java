@@ -28,6 +28,9 @@ import android.widget.PopupMenu;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import android.widget.ScrollView;
+
+import java.text.DecimalFormat;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -38,6 +41,9 @@ public class MainActivity extends Activity {
     private static final int YELLOW = 0xFFFFC107;
     private static final int BG = 0xFFF2F5FA;
     private static final int RED = 0xFFD32F2F;
+    private static final float W_NO = 0.8f, W_ITEM = 2.2f, W_BRAND = 1.6f,
+            W_QTY = 1.5f, W_WS = 1.8f, W_RT = 1.6f;
+    private static final DecimalFormat MONEY = new DecimalFormat("#,##0.##");
 
     private DbHelper db;
     private List<DbHelper.Item> data = new ArrayList<>();
@@ -115,10 +121,10 @@ public class MainActivity extends Activity {
         LinearLayout titles = new LinearLayout(this);
         titles.setOrientation(LinearLayout.VERTICAL);
         titles.setPadding(dp(12), 0, dp(8), 0);
-        TextView title = text("MWANGAZA", 20, Color.WHITE, true);
-        title.setLetterSpacing(0.12f);
+        TextView title = text("MWANGAZA ELECTRONICS", 18, Color.WHITE, true);
+        title.setLetterSpacing(0.06f);
         titles.addView(title);
-        TextView sub = text("Electrical Services  |  We Power, You Shine", 11, YELLOW, true);
+        TextView sub = text("We Power, You Shine", 11, YELLOW, true);
         titles.addView(sub);
         header.addView(titles, weight(1f));
 
@@ -180,13 +186,16 @@ public class MainActivity extends Activity {
         head.setOrientation(LinearLayout.HORIZONTAL);
         head.setGravity(Gravity.CENTER_VERTICAL);
         head.setBackgroundColor(YELLOW);
-        head.setPadding(dp(12), dp(12), dp(12), dp(12));
-        head.addView(headCell("NO"), weight(1f));
-        head.addView(headCell("ITEMS"), weight(4f));
-        head.addView(headCell("BRAND"), weight(3f));
+        head.setPadding(dp(8), dp(10), dp(8), dp(10));
+        head.addView(headCell("NO"), weight(W_NO));
+        head.addView(headCell("ITEMS"), weight(W_ITEM));
+        head.addView(headCell("BRAND"), weight(W_BRAND));
+        head.addView(headCell("QUANTITY"), weight(W_QTY));
+        head.addView(headCell("WHOLESALE\nPRICE"), weight(W_WS));
+        head.addView(headCell("RETAIL\nPRICE"), weight(W_RT));
         headerSpacer = new View(this);
         headerSpacer.setVisibility(View.GONE);
-        head.addView(headerSpacer, new LinearLayout.LayoutParams(dp(40), 1));
+        head.addView(headerSpacer, new LinearLayout.LayoutParams(dp(32), 1));
         card.addView(head);
 
         listView = new ListView(this);
@@ -207,7 +216,7 @@ public class MainActivity extends Activity {
 
         LinearLayout.LayoutParams cp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f);
-        cp.setMargins(dp(12), dp(4), dp(12), 0);
+        cp.setMargins(dp(8), dp(4), dp(8), 0);
         col.addView(card, cp);
 
         countView = text("", 12, 0xFF6B7A8C, true);
@@ -234,8 +243,7 @@ public class MainActivity extends Activity {
     }
 
     private TextView headCell(String s) {
-        TextView t = text(s, 13, DARK, true);
-        t.setLetterSpacing(0.08f);
+        TextView t = text(s, 9.5f, DARK, true);
         return t;
     }
 
@@ -295,28 +303,40 @@ public class MainActivity extends Activity {
         if (empty && deleteMode) setDeleteMode(false);
     }
 
+    private EditText field(LinearLayout box, String hint, int type, String value) {
+        EditText e = new EditText(this);
+        e.setHint(hint);
+        e.setInputType(type);
+        if (value != null) e.setText(value);
+        box.addView(e);
+        return e;
+    }
+
     private void showItemDialog(final DbHelper.Item existing) {
         LinearLayout box = new LinearLayout(this);
         box.setOrientation(LinearLayout.VERTICAL);
         box.setPadding(dp(22), dp(12), dp(22), dp(4));
+        ScrollView sv = new ScrollView(this);
+        sv.addView(box);
 
-        final EditText itemEt = new EditText(this);
-        itemEt.setHint("Item (e.g. Microwave 20L)");
-        itemEt.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_WORDS);
-        final EditText brandEt = new EditText(this);
-        brandEt.setHint("Brand (e.g. Hotpoint)");
-        brandEt.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_WORDS);
-        if (existing != null) {
-            itemEt.setText(existing.item);
-            brandEt.setText(existing.brand);
-        }
-        box.addView(itemEt);
-        box.addView(brandEt);
+        final int TXT = InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_WORDS;
+        final int NUM = InputType.TYPE_CLASS_NUMBER;
+        final int DEC = InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_FLAG_DECIMAL;
+        final EditText itemEt = field(box, "Item (e.g. Microwave 20L)", TXT,
+                existing == null ? null : existing.item);
+        final EditText brandEt = field(box, "Brand (e.g. Hotpoint)", TXT,
+                existing == null ? null : existing.brand);
+        final EditText qtyEt = field(box, "Quantity", NUM,
+                existing == null ? null : String.valueOf(existing.quantity));
+        final EditText wsEt = field(box, "Wholesale price", DEC,
+                existing == null ? null : plain(existing.wholesale));
+        final EditText rtEt = field(box, "Retail price", DEC,
+                existing == null ? null : plain(existing.retail));
 
         final AlertDialog d = new AlertDialog.Builder(this,
                 android.R.style.Theme_Material_Light_Dialog_Alert)
                 .setTitle(existing == null ? "Add Item" : "Edit Item")
-                .setView(box)
+                .setView(sv)
                 .setPositiveButton("Save", null)
                 .setNegativeButton("Cancel", null)
                 .create();
@@ -329,12 +349,24 @@ public class MainActivity extends Activity {
                 itemEt.setError("Enter the item name");
                 return;
             }
-            if (existing == null) db.add(it, br);
-            else db.update(existing.id, it, br);
+            int qty = 0;
+            try { qty = Integer.parseInt(qtyEt.getText().toString().trim()); } catch (Exception ignored) {}
+            double ws = parseMoney(wsEt.getText().toString());
+            double rt = parseMoney(rtEt.getText().toString());
+            if (existing == null) db.add(it, br, qty, ws, rt);
+            else db.update(existing.id, it, br, qty, ws, rt);
             d.dismiss();
             refresh();
         });
         itemEt.requestFocus();
+    }
+
+    private double parseMoney(String s) {
+        try { return Double.parseDouble(s.trim()); } catch (Exception e) { return 0; }
+    }
+
+    private String plain(double v) {
+        return v == Math.floor(v) ? String.valueOf((long) v) : String.valueOf(v);
     }
 
     private void confirmDelete(final DbHelper.Item it) {
@@ -385,6 +417,9 @@ public class MainActivity extends Activity {
             r.no.setText(String.valueOf(position + 1));
             r.item.setText(it.item);
             r.brand.setText(TextUtils.isEmpty(it.brand) ? "-" : it.brand);
+            r.qty.setText(String.valueOf(it.quantity));
+            r.ws.setText(MONEY.format(it.wholesale));
+            r.rt.setText(MONEY.format(it.retail));
             r.setBackgroundColor(position % 2 == 0 ? Color.WHITE : 0xFFEEF4FB);
             r.bin.setVisibility(deleteMode ? View.VISIBLE : View.GONE);
             r.bin.setOnClickListener(v -> confirmDelete(it));
@@ -396,24 +431,31 @@ public class MainActivity extends Activity {
     }
 
     private class Row extends LinearLayout {
-        final TextView no, item, brand;
+        final TextView no, item, brand, qty, ws, rt;
         final ImageButton bin;
 
         Row(Context c) {
             super(c);
             setOrientation(HORIZONTAL);
             setGravity(Gravity.CENTER_VERTICAL);
-            setPadding(dp(12), dp(12), dp(12), dp(12));
-            no = text("", 14, 0xFF6B7A8C, true);
-            item = text("", 15, 0xFF1B2733, true);
-            brand = text("", 14, 0xFF3A4A5C, false);
-            addView(no, weight(1f));
-            addView(item, weight(4f));
-            addView(brand, weight(3f));
+            setPadding(dp(8), dp(11), dp(8), dp(11));
+            no = text("", 12, 0xFF6B7A8C, true);
+            item = text("", 13, 0xFF1B2733, true);
+            brand = text("", 12, 0xFF3A4A5C, false);
+            qty = text("", 12, 0xFF3A4A5C, false);
+            ws = text("", 12, 0xFF3A4A5C, false);
+            rt = text("", 12, 0xFF0B5FA8, true);
+            addView(no, weight(W_NO));
+            addView(item, weight(W_ITEM));
+            addView(brand, weight(W_BRAND));
+            addView(qty, weight(W_QTY));
+            addView(ws, weight(W_WS));
+            addView(rt, weight(W_RT));
             bin = new ImageButton(c);
             bin.setImageResource(R.drawable.ic_delete);
             bin.setBackground(null);
-            addView(bin, new LinearLayout.LayoutParams(dp(40), dp(32)));
+            bin.setPadding(0, 0, 0, 0);
+            addView(bin, new LinearLayout.LayoutParams(dp(32), dp(32)));
         }
     }
 }
